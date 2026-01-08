@@ -1,265 +1,243 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import requests
 from bs4 import BeautifulSoup
-import time
+from urllib.parse import urljoin
 import csv
 import json
-from urllib.parse import urljoin
+import time
 
-def scrape_bcci_players_with_selenium():
+def scrape_bcci_players():
     base_url = "https://www.bcci.tv"
     target_url = "https://www.bcci.tv/international/men/videos/player"
     
-    print("Initializing Selenium WebDriver...")
-    
-    # Setup Chrome options
-    options = webdriver.ChromeOptions()
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    
-    # Uncomment to run in headless mode (no browser window)
-    # options.add_argument('--headless')
-    
-    driver = webdriver.Chrome(options=options)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
     
     try:
-        print(f"Loading page: {target_url}")
-        driver.get(target_url)
-        time.sleep(3)  # Initial wait for page load
+        print(f"Fetching data from: {target_url}")
+        response = requests.get(target_url, headers=headers)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
         
         players_data = []
-        player_set = set()  # To track unique players
-        load_more_attempts = 0
-        max_load_more_attempts = 10  # Safety limit
         
-        print("Looking for players and 'Load More' button...")
+        # Find all player anchor tags with onclick="click_player(this)"
+        player_links = soup.find_all('a', onclick="click_player(this)")
         
-        while load_more_attempts < max_load_more_attempts:
-            # Get current page source
-            page_source = driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-            
-            # Find all player links
-            player_links = soup.find_all('a', onclick="click_player(this)")
-            
-            current_batch_count = 0
-            for link in player_links:
-                try:
-                    player_info = extract_player_info(link, base_url)
-                    
-                    if player_info and player_info.get('name') and player_info['name'] not in player_set:
-                        player_set.add(player_info['name'])
-                        players_data.append(player_info)
-                        current_batch_count += 1
-                        print(f"  Found: {player_info['name']}")
-                        
-                except Exception as e:
-                    continue
-            
-            print(f"Batch {load_more_attempts + 1}: Found {current_batch_count} new players")
-            print(f"Total so far: {len(players_data)} players")
-            
-            # Try to find and click "Load More" button
+        print(f"Found {len(player_links)} player links with onclick attribute")
+        
+        for link in player_links:
             try:
-                # Look for load more button by various possible selectors
-                load_selectors = [
-                    "button.load-more",
-                    "button:contains('Load More')",
-                    ".load-more-btn",
-                    "#load-more",
-                    "button[onclick*='load']",
-                    "a.load-more",
-                    "a:contains('Load More')",
-                    ".btn-load-more",
-                ]
+                player_info = {}
                 
-                load_more_button = None
-                for selector in load_selectors:
-                    try:
-                        load_more_button = driver.find_element(By.CSS_SELECTOR, selector)
-                        if load_more_button and load_more_button.is_displayed():
-                            break
-                    except:
-                        continue
-                
-                if not load_more_button:
-                    # Try by text content
-                    try:
-                        load_more_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Load More')]")
-                    except:
-                        try:
-                            load_more_button = driver.find_element(By.XPATH, "//a[contains(text(), 'Load More')]")
-                        except:
-                            load_more_button = None
-                
-                if load_more_button and load_more_button.is_displayed():
-                    print(f"\nClicking 'Load More' button (Attempt {load_more_attempts + 1})...")
-                    
-                    # Scroll to the button
-                    driver.execute_script("arguments[0].scrollIntoView(true);", load_more_button)
-                    time.sleep(1)
-                    
-                    # Click the button
-                    driver.execute_script("arguments[0].click();", load_more_button)
-                    
-                    # Wait for new content to load
-                    time.sleep(3)
-                    
-                    # Wait for new players to appear
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            lambda d: len(d.find_elements(By.CSS_SELECTOR, "a[onclick='click_player(this)']")) > len(player_links)
-                        )
-                    except TimeoutException:
-                        print("Timeout waiting for new players to load, but continuing...")
-                    
-                    load_more_attempts += 1
+                # Extract player name from data-player_name attribute
+                player_name = link.get('data-player_name', '').strip()
+                if player_name:
+                    player_info['name'] = player_name
                 else:
-                    print("\nNo more 'Load More' button found. Stopping.")
-                    break
+                    # Fallback: get name from alt text of image
+                    img_tag = link.find('img')
+                    if img_tag and img_tag.get('alt'):
+                        player_info['name'] = img_tag['alt'].strip()
+                
+                # Extract player link from href attribute
+                player_href = link.get('href', '')
+                if player_href:
+                    # Make URL absolute if relative
+                    if not player_href.startswith('http'):
+                        player_href = urljoin(base_url, player_href)
+                    player_info['link'] = player_href
+                
+                # Extract player ID from the link (last part of URL after slash)
+                if player_href:
+                    parts = player_href.rstrip('/').split('/')
+                    if parts:
+                        player_info['player_id'] = parts[-1]
+                
+                # Extract image URL
+                img_tag = link.find('img')
+                if img_tag and img_tag.get('src'):
+                    img_src = img_tag['src'].strip()
+                    # Make image URL absolute if relative
+                    if img_src and not img_src.startswith('http'):
+                        img_src = urljoin(base_url, img_src)
+                    player_info['image_url'] = img_src
                     
+                    # Also get alt text if available
+                    if img_tag.get('alt'):
+                        player_info['alt_text'] = img_tag['alt'].strip()
+                
+                # Extract any other data attributes
+                for attr, value in link.attrs.items():
+                    if attr.startswith('data-'):
+                        player_info[attr] = value
+                
+                # Only add if we have a name
+                if 'name' in player_info:
+                    players_data.append(player_info)
+                    print(f"✓ Found: {player_info['name']}")
+                
             except Exception as e:
-                print(f"Error clicking load more button: {e}")
-                break
+                print(f"Error processing player link: {e}")
+                continue
         
-        print(f"\nScraping complete! Total players found: {len(players_data)}")
+        # Alternative approach if the above doesn't work
+        if not players_data:
+            print("Trying alternative search methods...")
+            
+            # Look for all anchor tags containing player links
+            all_links = soup.find_all('a', href=True)
+            for link in all_links:
+                href = link['href']
+                if '/players/' in href or '/player/' in href:
+                    try:
+                        player_info = {}
+                        
+                        # Get name from img alt or link text
+                        img_tag = link.find('img')
+                        if img_tag and img_tag.get('alt'):
+                            player_info['name'] = img_tag['alt'].strip()
+                        else:
+                            # Try to extract name from href
+                            name_from_href = href.split('/')[-2].replace('-', ' ').title()
+                            player_info['name'] = name_from_href
+                        
+                        # Make URL absolute
+                        player_info['link'] = urljoin(base_url, href)
+                        
+                        # Get image
+                        if img_tag and img_tag.get('src'):
+                            img_src = img_tag['src'].strip()
+                            if not img_src.startswith('http'):
+                                img_src = urljoin(base_url, img_src)
+                            player_info['image_url'] = img_src
+                        
+                        players_data.append(player_info)
+                        print(f"✓ Found via alternative: {player_info['name']}")
+                        
+                    except Exception as e:
+                        continue
+        
+        # Remove duplicates based on player name
+        unique_players = []
+        seen_names = set()
+        for player in players_data:
+            name = player.get('name')
+            if name and name not in seen_names:
+                seen_names.add(name)
+                unique_players.append(player)
+        
+        players_data = unique_players
         
         # Display results
-        display_results(players_data)
+        print(f"\n{'='*60}")
+        print(f"SCRAPING COMPLETE")
+        print(f"{'='*60}")
+        print(f"Total unique players found: {len(players_data)}")
+        print(f"{'='*60}")
         
-        # Save data
-        save_data(players_data)
+        for i, player in enumerate(players_data, 1):
+            print(f"\n{i}. {player.get('name', 'Unknown')}")
+            print(f"   ID: {player.get('player_id', 'N/A')}")
+            print(f"   Link: {player.get('link', 'N/A')}")
+            print(f"   Image: {player.get('image_url', 'No image')}")
+            if player.get('alt_text'):
+                print(f"   Alt Text: {player.get('alt_text')}")
+        
+        # Save to CSV
+        if players_data:
+            with open('bcci_players.csv', 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['name', 'player_id', 'link', 'image_url', 'alt_text']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(players_data)
+            print(f"\n✅ Data saved to 'bcci_players.csv'")
+        
+        # Save to JSON for structured data
+        with open('bcci_players.json', 'w', encoding='utf-8') as jsonfile:
+            json.dump(players_data, jsonfile, indent=2, ensure_ascii=False)
+        print(f"✅ Data also saved to 'bcci_players.json'")
         
         return players_data
         
-    except Exception as e:
-        print(f"Error during scraping: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching the page: {e}")
         return []
-    finally:
-        print("\nClosing browser...")
-        driver.quit()
+    except Exception as e:
+        print(f"❌ An unexpected error occurred: {e}")
+        return []
 
-def extract_player_info(link, base_url):
-    """Extract player information from a link element"""
-    player_info = {}
-    
-    # Extract player name
-    player_name = link.get('data-player_name', '').strip()
-    if not player_name:
-        img_tag = link.find('img')
-        if img_tag and img_tag.get('alt'):
-            player_name = img_tag['alt'].strip()
-    
-    if not player_name:
-        return None
-    
-    player_info['name'] = player_name
-    
-    # Extract player link
-    player_href = link.get('href', '')
-    if player_href:
-        if not player_href.startswith('http'):
-            player_href = urljoin(base_url, player_href)
-        player_info['link'] = player_href
+def get_individual_player_details(player_url):
+    """Fetch additional details for a specific player"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        # Extract player ID
-        parts = player_href.rstrip('/').split('/')
-        if parts:
-            player_info['player_id'] = parts[-1]
-    
-    # Extract image URL
-    img_tag = link.find('img')
-    if img_tag and img_tag.get('src'):
-        img_src = img_tag['src'].strip()
-        if img_src and not img_src.startswith('http'):
-            img_src = urljoin(base_url, img_src)
-        player_info['image_url'] = img_src
+        print(f"\nFetching details from: {player_url}")
+        response = requests.get(player_url, headers=headers)
+        response.raise_for_status()
         
-        if img_tag.get('alt'):
-            player_info['alt_text'] = img_tag['alt'].strip()
-    
-    # Extract other data attributes
-    for attr, value in link.attrs.items():
-        if attr.startswith('data-'):
-            player_info[attr] = value
-    
-    return player_info
-
-def display_results(players_data):
-    """Display the scraped results"""
-    print(f"\n{'='*60}")
-    print(f"SCRAPING COMPLETE")
-    print(f"{'='*60}")
-    print(f"Total players found: {len(players_data)}")
-    print(f"{'='*60}")
-    
-    for i, player in enumerate(players_data[:10], 1):  # Show first 10
-        print(f"\n{i}. {player.get('name', 'Unknown')}")
-        print(f"   ID: {player.get('player_id', 'N/A')}")
-        print(f"   Link: {player.get('link', 'N/A')}")
-    
-    if len(players_data) > 10:
-        print(f"\n... and {len(players_data) - 10} more players")
-
-def save_data(players_data):
-    """Save scraped data to files"""
-    if not players_data:
-        print("No data to save!")
-        return
-    
-    # Save to CSV
-    csv_filename = 'bcci_all_players.csv'
-    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['name', 'player_id', 'link', 'image_url', 'alt_text']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(players_data)
-    print(f"\n✅ Data saved to '{csv_filename}'")
-    
-    # Save to JSON
-    json_filename = 'bcci_all_players.json'
-    with open(json_filename, 'w', encoding='utf-8') as jsonfile:
-        json.dump(players_data, jsonfile, indent=2, ensure_ascii=False)
-    print(f"✅ Data also saved to '{json_filename}'")
-    
-    # Save a simple text list
-    txt_filename = 'bcci_players_list.txt'
-    with open(txt_filename, 'w', encoding='utf-8') as txtfile:
-        txtfile.write("BCCI.tv Players List\n")
-        txtfile.write("=" * 50 + "\n\n")
-        for i, player in enumerate(players_data, 1):
-            txtfile.write(f"{i}. {player['name']}\n")
-            txtfile.write(f"   Link: {player.get('link', 'N/A')}\n")
-            txtfile.write(f"   ID: {player.get('player_id', 'N/A')}\n\n")
-    print(f"✅ Player list saved to '{txt_filename}'")
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract page title
+        title = soup.find('title')
+        if title:
+            print(f"Page Title: {title.get_text(strip=True)}")
+        
+        # You can add more specific extraction logic here
+        # For example, find video count, recent videos, etc.
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error fetching player details: {e}")
+        return False
 
 if __name__ == "__main__":
-    print("BCCI.tv Player Scraper with Load More Support")
-    print("=" * 60)
-    print("This script will:")
-    print("1. Open the players page")
-    print("2. Click 'Load More' button multiple times")
-    print("3. Extract all players (not just first 20)")
-    print("=" * 60)
+    print("BCCI.tv Player Scraper")
+    print("=" * 50)
     
-    players = scrape_bcci_players_with_selenium()
+    # Scrape all players
+    players = scrape_bcci_players()
     
+    # Optionally fetch details for first few players
     if players:
-        print(f"\n🎉 Successfully scraped {len(players)} players!")
-        print(f"\n📊 First few players:")
-        for i, player in enumerate(players[:5], 1):
-            print(f"   {i}. {player['name']}")
+        print(f"\n{'='*60}")
+        print("FETCHING DETAILS FOR FIRST 3 PLAYERS")
+        print(f"{'='*60}")
         
-        if len(players) >= 34:
-            print(f"\n✅ Found all {len(players)} players (including those behind 'Load More')")
-        else:
-            print(f"\n⚠️  Found {len(players)} players, but expected 34+")
-            print("   The 'Load More' button might have different selectors")
+        for i, player in enumerate(players[:3]):
+            print(f"\n{i+1}. Getting details for: {player['name']}")
+            get_individual_player_details(player['link'])
+            time.sleep(1)  # Be polite to the server
+        
+        print(f"\n{'='*60}")
+        print("SCRIPT COMPLETED SUCCESSFULLY!")
+        print(f"{'='*60}")
+        
+        # Show summary
+        print(f"\n📊 SUMMARY:")
+        print(f"   Total Players: {len(players)}")
+        print(f"   CSV File: bcci_players.csv")
+        print(f"   JSON File: bcci_players.json")
+        
+        # Show sample players
+        print(f"\n👤 SAMPLE PLAYERS:")
+        for i, player in enumerate(players[:5]):
+            print(f"   {i+1}. {player['name']} → {player['link']}")
     else:
-        print("\n❌ No players were found.")
+        print("\n❌ No players were found. Possible reasons:")
+        print("   1. The website structure may have changed")
+        print("   2. The page requires JavaScript rendering")
+        print("   3. The URL might be different")
+        print("\n💡 TROUBLESHOOTING:")
+        print("   - Check if the URL is correct")
+        print("   - Try using Selenium for JavaScript-rendered content")
+        print("   - Inspect the page HTML to find correct selectors")

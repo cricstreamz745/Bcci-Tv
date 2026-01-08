@@ -1,0 +1,45 @@
+name: BCCI Players Scraper (Requests)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"   # runs daily
+  push:
+    paths:
+      - scrape.py
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run scraper
+        run: |
+          python scrape.py
+
+      - name: Commit output files
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          if [ -f bcci_players.json ]; then
+            git add bcci_players.json bcci_players.csv
+            git commit -m "Auto update BCCI players data" || echo "No changes"
+            git push
+          else
+            echo "No JSON generated, skipping commit"
+          fi

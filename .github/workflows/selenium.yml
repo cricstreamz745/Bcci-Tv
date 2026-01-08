@@ -3,7 +3,7 @@ name: BCCI Selenium Scraper
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */24 * * *"
+    - cron: "0 2 * * *"
   push:
     paths:
       - scrape.py
@@ -15,32 +15,35 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install Python deps
         run: |
           pip install selenium beautifulsoup4 requests
 
-      - name: Install Google Chrome
+      - name: Install Chrome
         run: |
           sudo apt update
           sudo apt install -y google-chrome-stable
 
-      - name: Enable headless mode & run scraper
+      - name: Run scraper
         run: |
           sed -i "s/# options.add_argument('--headless')/options.add_argument('--headless')/" scrape.py
           python scrape.py
 
-      - name: Commit results
+      - name: Commit output
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-          git add *.json *.csv *.txt
-          git commit -m "Auto update BCCI players data" || echo "No changes"
-          git push
+
+          if [ -f bcci_all_players.json ]; then
+            git add bcci_all_players.json bcci_all_players.csv bcci_players_list.txt
+            git commit -m "Auto update BCCI players" || echo "No changes"
+            git push
+          else
+            echo "No files generated"
+          fi

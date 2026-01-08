@@ -1,0 +1,58 @@
+name: BCCI Selenium Scraper
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */24 * * *"   # once per day
+  push:
+    paths:
+      - scrape.py
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install selenium beautifulsoup4 requests
+
+      - name: Install Google Chrome
+        run: |
+          sudo apt update
+          sudo apt install -y google-chrome-stable
+
+      - name: Install ChromeDriver
+        run: |
+          CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1)
+          wget -q https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION
+          wget -q https://chromedriver.storage.googleapis.com/$(cat LATEST_RELEASE_$CHROME_VERSION)/chromedriver_linux64.zip
+          unzip chromedriver_linux64.zip
+          sudo mv chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
+
+      - name: Run Selenium Scraper
+        env:
+          DISPLAY: :99
+        run: |
+          sed -i "s/# options.add_argument('--headless')/options.add_argument('--headless')/" scrape.py
+          python scrape.py
+
+      - name: Commit results
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add *.json *.csv *.txt
+          git commit -m "Auto update BCCI players data" || echo "No changes"
+          git push
